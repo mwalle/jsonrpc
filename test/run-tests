@@ -1,7 +1,11 @@
 #!/bin/sh
 
 topdir=$(dirname $0)/..
+
 testprog=${topdir}/test/handle_stdio
+if [ "$1" == "--valgrind" ]; then
+	testprog="valgrind --leak-check=full --show-reachable=yes --track-origins=yes -q ${testprog}"
+fi
 
 suites=$(ls -1 ${topdir}/test/suites/)
 
@@ -12,9 +16,15 @@ for suite in ${suites}; do
 		cat ${testpath}/input | ${testprog} > ${testpath}/stdout 2> ${testpath}/stderr
 
 		if cmp -s ${testpath}/output ${testpath}/stdout; then
-			echo ${suite}/${testcase} passed
+			result="passed"
 		else
-			echo ${suite}/${testcase} FAILED
+			result="FAILED"
 		fi
+
+		if [ -s ${testpath}/stderr ]; then
+			result="${result} (valgrind error)"
+		fi
+
+		echo ${suite}/${testcase} ${result}
 	done
 done

@@ -20,7 +20,10 @@ test/handle_stdio: test/handle_stdio.c libjsonrpc.a $(jsonrpc_HEADERS)
 	$(CC) $(JANSSON_LIBS) -L$(TOPDIR) $(CFLAGS) -o $@ $< -ljsonrpc
 
 test: test/handle_stdio
-	test/run-tests
+	@test/run-tests --valgrind
+
+test-quick: test/handle_stdio
+	@test/run-tests
 
 clean:
 	rm -f $(jsonrpc_OBJECTS) libjsonrpc.a
