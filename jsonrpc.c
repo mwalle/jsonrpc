@@ -35,6 +35,7 @@ struct jsonrpc_ret {
 	json_t *obj;
 };
 
+static jsonrpc_confflags_t config;
 static struct rpc_callback *rpc_callbacks = NULL;
 
 static json_t *jsonrpc_error_object(enum rsp_error err, json_t *data)
@@ -60,7 +61,7 @@ static json_t *jsonrpc_error_object(enum rsp_error err, json_t *data)
 	errobj = json_object();
 	json_object_set_new(errobj, "code", json_integer(code[err]));
 	json_object_set_new(errobj, "message", json_string(message[err]));
-	if (data) {
+	if (!(config & JSONRPC_DISABLE_ERROR_TEXT) && data) {
 		json_object_set(errobj, "data", data);
 	}
 
@@ -109,6 +110,7 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 	json_t *result = NULL, *error = NULL;
 	struct rpc_callback *walk;
 	char *rbuf;
+	size_t flags = 0;
 
 	/* decode */
 	if (file) {
@@ -192,7 +194,11 @@ send_rsp:
 	json_decref(nid);
 
 	/* encode */
-	rbuf = json_dumps(rsp, 0);
+	if (config & JSONRPC_ORDERED_RESPONSE) {
+		flags |= JSON_PRESERVE_ORDER;
+	}
+	rbuf = json_dumps(rsp, flags);
+
 	assert(rbuf);
 	json_decref(rsp);
 
@@ -260,4 +266,9 @@ void _jsonrpc_register(const char *name, rpc_callback cb)
 		}
 		walk->next = new;
 	}
+}
+
+void jsonrpc_config_set(jsonrpc_confflags_t flags)
+{
+	config = flags;
 }
