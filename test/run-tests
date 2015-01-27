@@ -1,0 +1,20 @@
+#!/bin/sh
+
+topdir=$(dirname $0)/..
+testprog=${topdir}/test/handle_stdio
+
+suites=$(ls -1 ${topdir}/test/suites/)
+
+for suite in ${suites}; do
+	testcases=$(ls -1 ${topdir}/test/suites/${suite}/)
+	for testcase in ${testcases}; do
+		testpath=${topdir}/test/suites/${suite}/${testcase}
+		cat ${testpath}/input | ${testprog} > ${testpath}/stdout 2> ${testpath}/stderr
+
+		if cmp -s ${testpath}/output ${testpath}/stdout; then
+			echo ${suite}/${testcase} passed
+		else
+			echo ${suite}/${testcase} FAILED
+		fi
+	done
+done
