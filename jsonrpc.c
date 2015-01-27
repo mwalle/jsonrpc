@@ -268,6 +268,17 @@ void _jsonrpc_register(const char *name, rpc_callback cb)
 	}
 }
 
+static void __attribute__((destructor)) _jsonrpc_unregister_all(void)
+{
+	struct rpc_callback *next, *walk = rpc_callbacks;
+
+	while (walk) {
+		next = walk->next;
+		free(walk);
+		walk = next;
+	}
+}
+
 void jsonrpc_config_set(jsonrpc_confflags_t flags)
 {
 	config = flags;
