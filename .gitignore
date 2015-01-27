@@ -1,4 +1,3 @@
 *.a
 *.o
-*.pyc
 test/handle_stdio
