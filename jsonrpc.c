@@ -102,14 +102,14 @@ static json_t *jsonrpc_response_object(json_t *result, json_t *error,
 static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 {
 	int rc;
-	jsonrpc_ret_t ret;
+	jsonrpc_ret_t cbret;
+	char *ret;
 	json_error_t err;
 	const char* jsonrpc;
 	const char *method;
-	json_t *req, *rsp, *params = NULL, *id = NULL, *nid = NULL;
+	json_t *req, *rsp = NULL, *params = NULL, *id = NULL, *nid = NULL;
 	json_t *result = NULL, *error = NULL;
 	struct rpc_callback *walk;
-	char *rbuf;
 	size_t flags = 0;
 
 	/* decode */
@@ -120,6 +120,7 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 	}
 	if (!req) {
 		error = jsonrpc_error_object_str(ERR_PARSE_ERROR, err.text);
+		id = nid = json_null();
 		goto send_rsp;
 	}
 
@@ -132,21 +133,24 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 
 	if (rc) {
 		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST, err.text);
+		id = nid = json_null();
+		goto send_rsp;
+	}
+
+	/* This check has to be first, because we return the id in the response and
+	 * therefore it must be valid. */
+	if (id && !json_is_string(id) && !json_is_number(id) && !json_is_null(id)) {
+		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
+				"\"id\" must contain a string, number, or NULL value");
+		/* The id parsing was successful, but it is not one of the allowed types.
+		 * Reset it to null. */
+		id = nid = json_null();
 		goto send_rsp;
 	}
 
 	if (strcmp(jsonrpc, "2.0")) {
 		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
 				"\"jsonrpc\" must be exactly \"2.0\"");
-		goto send_rsp;
-	}
-
-	if (id && !json_is_string(id) && !json_is_number(id) && !json_is_null(id)) {
-		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
-				"\"id\" must contain a string, number, or NULL value");
-		/* id is incorrect. we set it to NULL in which case null will be
-		 * send in the response */
-		id = NULL;
 		goto send_rsp;
 	}
 
@@ -169,40 +173,42 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 	}
 
 	/* call callback */
-	ret = walk->cb(params);
-	if (!ret) {
+	cbret = walk->cb(params);
+	if (!cbret) {
 		error = jsonrpc_error_object(ERR_INTERNAL_ERROR, NULL);
-	} else if (ret->type == JSONRPC_ERROR) {
-		error = ret->obj;
-	} else if (ret->type == JSONRPC_RESULT) {
-		result = ret->obj;
+	} else if (cbret->type == JSONRPC_ERROR) {
+		error = cbret->obj;
+	} else if (cbret->type == JSONRPC_RESULT) {
+		result = cbret->obj;
 	} else {
 		error = jsonrpc_error_object(ERR_INTERNAL_ERROR, NULL);
 	}
-	free(ret);
+	free(cbret);
 
 send_rsp:
-	/* every response must have an id member. if there was an error reading the
-	 * id from the request the id must be null. */
-	if (error && !id) {
-		id = nid = json_null();
+	if (!id) {
+		/* this is a notification, no response is sent */
+		ret = NULL;
+		goto out_free;
 	}
+
 	rsp = jsonrpc_response_object(result, error, id);
-	json_decref(result);
-	json_decref(error);
-	json_decref(req);
-	json_decref(nid);
 
 	/* encode */
 	if (config & JSONRPC_ORDERED_RESPONSE) {
 		flags |= JSON_PRESERVE_ORDER;
 	}
-	rbuf = json_dumps(rsp, flags);
-
-	assert(rbuf);
+	ret = json_dumps(rsp, flags);
+	assert(ret);
 	json_decref(rsp);
 
-	return rbuf;
+out_free:
+	json_decref(result);
+	json_decref(error);
+	json_decref(req);
+	json_decref(nid);
+
+	return ret;
 }
 
 char *jsonrpc_handle_request(const char *buf, size_t len)

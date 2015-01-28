@@ -64,7 +64,9 @@ int main()
 			| JSONRPC_ORDERED_RESPONSE);
 
 	buf = jsonrpc_handle_request_from_file(stdin);
-	printf("%s\n", buf);
+	if (buf) {
+		printf("%s\n", buf);
+	}
 	free(buf);
 
 	return 0;
