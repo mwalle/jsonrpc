@@ -4,7 +4,7 @@ jsonrpc_SOURCES := $(wildcard *.c)
 jsonrpc_HEADERS := $(wildcard *.h)
 jsonrpc_OBJECTS := $(jsonrpc_SOURCES:.c=.o)
 
-CFLAGS += -I$(TOPDIR) -O2 -Wall -Werror
+CFLAGS += -I$(TOPDIR) -O2 -Wall -Werror -g
 
 JANSSON_LIBS := $(shell pkg-config --libs jansson)
 

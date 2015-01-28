@@ -99,66 +99,77 @@ static json_t *jsonrpc_response_object(json_t *result, json_t *error,
 	return rspobj;
 }
 
-static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
+static json_t *decode_request(FILE *file, const char *buf, size_t len,
+		json_t **_request)
+{
+	json_t *request;
+	json_error_t err;
+
+	if (file) {
+		request = json_loadf(file, 0, &err);
+	} else {
+		request = json_loadb(buf, len, 0, &err);
+	}
+	if (!request) {
+		return jsonrpc_error_object_str(ERR_PARSE_ERROR, err.text);
+	}
+
+	*_request = request;
+
+	return NULL;
+}
+
+static json_t *validate_request(json_t *req, json_t **_method, json_t **_params,
+		json_t **_id)
 {
 	int rc;
-	jsonrpc_ret_t cbret;
-	char *ret;
 	json_error_t err;
-	const char* jsonrpc;
-	const char *method;
-	json_t *req, *rsp = NULL, *params = NULL, *id = NULL, *nid = NULL;
-	json_t *result = NULL, *error = NULL;
-	struct rpc_callback *walk;
-	size_t flags = 0;
+	char *jsonrpc;
+	json_t *method = NULL, *params = NULL, *id = NULL;
 
-	/* decode */
-	if (file) {
-		req = json_loadf(file, 0, &err);
-	} else {
-		req = json_loadb(buf, len, 0, &err);
-	}
-	if (!req) {
-		error = jsonrpc_error_object_str(ERR_PARSE_ERROR, err.text);
-		id = nid = json_null();
-		goto send_rsp;
-	}
-
-	/* validate */
-	rc = json_unpack_ex(req, &err, 0, "{s:s,s:s,s?o,s?o}",
+	rc = json_unpack_ex(req, &err, 0, "{s:s,s:o,s?o,s?o}",
 			"jsonrpc", &jsonrpc,
 			"method", &method,
 			"params", &params,
 			"id", &id);
 
 	if (rc) {
-		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST, err.text);
-		id = nid = json_null();
-		goto send_rsp;
+		return jsonrpc_error_object_str(ERR_INVALID_REQUEST, err.text);
 	}
 
-	/* This check has to be first, because we return the id in the response and
-	 * therefore it must be valid. */
 	if (id && !json_is_string(id) && !json_is_number(id) && !json_is_null(id)) {
-		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
+		return jsonrpc_error_object_str(ERR_INVALID_REQUEST,
 				"\"id\" must contain a string, number, or NULL value");
-		/* The id parsing was successful, but it is not one of the allowed types.
-		 * Reset it to null. */
-		id = nid = json_null();
-		goto send_rsp;
 	}
 
 	if (strcmp(jsonrpc, "2.0")) {
-		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
+		return jsonrpc_error_object_str(ERR_INVALID_REQUEST,
 				"\"jsonrpc\" must be exactly \"2.0\"");
-		goto send_rsp;
+	}
+
+	if (!json_is_string(method)) {
+		return jsonrpc_error_object_str(ERR_INVALID_REQUEST,
+				"\"method\" must be a string");
 	}
 
 	if (params && !json_is_array(params) && !json_is_object(params)) {
-		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
+		return jsonrpc_error_object_str(ERR_INVALID_REQUEST,
 				"\"params\" must be a an array or an object");
-		goto send_rsp;
 	}
+
+	*_id = json_incref(id);
+	*_method = json_incref(method);
+	*_params = json_incref(params);
+
+	return NULL;
+}
+
+static json_t *dispatch_request(const char* method, json_t *params,
+		json_t **_result)
+{
+	jsonrpc_ret_t ret;
+	json_t *result = NULL;
+	struct rpc_callback *walk;
 
 	/* find callback */
 	for (walk = rpc_callbacks; walk; walk = walk->next) {
@@ -168,45 +179,80 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 	}
 
 	if (!walk) {
-		error = jsonrpc_error_object(ERR_METHOD_NOT_FOUND, NULL);
-		goto send_rsp;
+		return jsonrpc_error_object(ERR_METHOD_NOT_FOUND, NULL);
 	}
 
 	/* call callback */
-	cbret = walk->cb(params);
-	if (!cbret) {
-		error = jsonrpc_error_object(ERR_INTERNAL_ERROR, NULL);
-	} else if (cbret->type == JSONRPC_ERROR) {
-		error = cbret->obj;
-	} else if (cbret->type == JSONRPC_RESULT) {
-		result = cbret->obj;
+	ret = walk->cb(params);
+	if (!ret) {
+		return jsonrpc_error_object(ERR_INTERNAL_ERROR, NULL);
+	} else if (ret->type == JSONRPC_ERROR) {
+		json_t *err = ret->obj;
+		free(ret);
+		return err;
+	} else if (ret->type == JSONRPC_RESULT) {
+		result = ret->obj;
 	} else {
-		error = jsonrpc_error_object(ERR_INTERNAL_ERROR, NULL);
+		return jsonrpc_error_object(ERR_INTERNAL_ERROR, NULL);
 	}
-	free(cbret);
+	free(ret);
+	*_result = result;
 
-send_rsp:
-	if (!id) {
-		/* this is a notification, no response is sent */
-		ret = NULL;
-		goto out_free;
-	}
+	return NULL;
+}
 
-	rsp = jsonrpc_response_object(result, error, id);
+static char *encode_response(json_t *response)
+{
+	size_t flags = 0;
 
-	/* encode */
 	if (config & JSONRPC_ORDERED_RESPONSE) {
 		flags |= JSON_PRESERVE_ORDER;
 	}
-	ret = json_dumps(rsp, flags);
-	assert(ret);
-	json_decref(rsp);
 
-out_free:
+	return json_dumps(response, flags);
+}
+
+static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
+{
+	json_t *error;
+	json_t *request = NULL, *method = NULL, *params = NULL, *id = NULL;
+	json_t *result = NULL;
+	json_t *response = NULL;
+	char *ret;
+
+	error = decode_request(file, buf, len, &request);
+
+	if (!error) {
+		error = validate_request(request, &method, &params, &id);
+	    json_decref(request);
+	}
+
+	if (error) {
+		/* if there was an parse error or an invalid request error, the id must
+		 * be set to null */
+		id = json_null();
+	}
+
+	if (!error) {
+		error = dispatch_request(json_string_value(method), params, &result);
+		json_decref(method);
+		json_decref(params);
+	}
+
+	if (!id) {
+		/* this is a notification, no response is sent */
+		json_decref(result);
+		json_decref(error);
+		return  NULL;
+	}
+
+	response = jsonrpc_response_object(result, error, id);
 	json_decref(result);
 	json_decref(error);
-	json_decref(req);
-	json_decref(nid);
+	json_decref(id);
+
+	ret = encode_response(response);
+	json_decref(response);
 
 	return ret;
 }
