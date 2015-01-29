@@ -18,6 +18,19 @@ static jsonrpc_ret_t noop(json_t *params)
 	return jsonrpc_result(json_null());
 }
 jsonrpc_register(noop);
+jsonrpc_register_name("update", noop);
+jsonrpc_register_name("notify_hello", noop);
+
+static jsonrpc_ret_t get_data(json_t *params)
+{
+	json_t *ret = json_array();
+
+	json_array_append_new(ret, json_string("hello"));
+	json_array_append_new(ret, json_integer(5));
+
+	return jsonrpc_result(ret);
+}
+jsonrpc_register(get_data);
 
 static jsonrpc_ret_t add(json_t *params)
 {
@@ -36,6 +49,21 @@ static jsonrpc_ret_t add(json_t *params)
 	return jsonrpc_result(json_integer(a+b));
 }
 jsonrpc_register(add);
+
+static jsonrpc_ret_t sum(json_t *params)
+{
+	int i, sum = 0;
+	if (!json_is_array(params)) {
+		return jsonrpc_error_invalid_params(NULL);
+	}
+
+	for (i = 0; i < json_array_size(params); i++) {
+		sum += json_integer_value(json_array_get(params, i));
+	}
+
+	return jsonrpc_result(json_integer(sum));
+}
+jsonrpc_register(sum);
 
 static jsonrpc_ret_t subtract(json_t *params)
 {
