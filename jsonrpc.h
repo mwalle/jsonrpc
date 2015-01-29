@@ -16,12 +16,16 @@ jsonrpc_ret_t jsonrpc_result(json_t *result);
 jsonrpc_ret_t jsonrpc_error_internal_error(json_t *data);
 jsonrpc_ret_t jsonrpc_error_invalid_params(json_t *data);
 
-#define jsonrpc_register_name(func, name) \
-static void __attribute__((constructor)) __jsonrpc_register_ ## func(void) { \
-	_jsonrpc_register(name, func); \
-}
+#define glue_(x, y) x##y
+#define glue(x, y) glue_(x, y)
+
+#define jsonrpc_register_name(name, func) \
+	static void __attribute__((constructor)) \
+	glue(__jsonrpc_register_init_, __COUNTER__) (void) { \
+		_jsonrpc_register(name, func); \
+	}
 
 #define jsonrpc_register(func) \
-	jsonrpc_register_name(func, #func)
+	jsonrpc_register_name(#func, func)
 
 #endif /* __JSONRPC_H */
