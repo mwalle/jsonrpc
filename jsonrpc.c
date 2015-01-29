@@ -212,21 +212,14 @@ static char *encode_response(json_t *response)
 	return json_dumps(response, flags);
 }
 
-static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
+static json_t *_jsonrpc_handle_single_request(json_t *request)
 {
 	json_t *error;
-	json_t *request = NULL, *method = NULL, *params = NULL, *id = NULL;
+	json_t *method = NULL, *params = NULL, *id = NULL;
 	json_t *result = NULL;
 	json_t *response = NULL;
-	char *ret;
 
-	error = decode_request(file, buf, len, &request);
-
-	if (!error) {
-		error = validate_request(request, &method, &params, &id);
-	    json_decref(request);
-	}
-
+	error = validate_request(request, &method, &params, &id);
 	if (error) {
 		/* if there was an parse error or an invalid request error, the id must
 		 * be set to null */
@@ -243,7 +236,7 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 		/* this is a notification, no response is sent */
 		json_decref(result);
 		json_decref(error);
-		return  NULL;
+		return NULL;
 	}
 
 	response = jsonrpc_response_object(result, error, id);
@@ -251,11 +244,71 @@ static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
 	json_decref(error);
 	json_decref(id);
 
+	return response;
+}
+
+static json_t *_jsonrpc_handle_multiple_requests(json_t *requests)
+{
+	int i;
+	json_t *responses;
+
+	responses = json_array();
+	for (i = 0; i < json_array_size(requests); i++) {
+		json_t *request = json_array_get(requests, i);
+		json_t *response = _jsonrpc_handle_single_request(request);
+		if (response) {
+			json_array_append_new(responses, response);
+		}
+	}
+
+	if (json_array_size(responses) == 0) {
+		json_decref(responses);
+		responses = NULL;
+	}
+
+	return responses;
+}
+
+static char *_jsonrpc_handle_request(FILE* file, const char *buf, size_t len)
+{
+	char *ret;
+	json_t *id, *error, *request = NULL, *response;
+
+	error = decode_request(file, buf, len, &request);
+	if (error) {
+		goto error;
+	}
+
+	if (json_is_array(request) && json_array_size(request) == 0) {
+		json_decref(request);
+		error = jsonrpc_error_object_str(ERR_INVALID_REQUEST,
+				"Request must not be an empty array.");
+		goto error;
+	}
+
+	if (!json_is_array(request)) {
+		response = _jsonrpc_handle_single_request(request);
+	} else {
+		response = _jsonrpc_handle_multiple_requests(request);
+	}
+	json_decref(request);
+
+	ret = encode_response(response);
+	json_decref(response);
+
+	return ret;
+
+error:
+	id = json_null();
+	response = jsonrpc_response_object(NULL, error, id);
+	json_decref(id);
+	json_decref(error);
 	ret = encode_response(response);
 	json_decref(response);
 
 	return ret;
 }
+
 
 char *jsonrpc_handle_request(const char *buf, size_t len)
 {
